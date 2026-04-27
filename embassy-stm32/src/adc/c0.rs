@@ -154,13 +154,13 @@ impl AdcRegs for crate::pac::adc::Adc {
         }
 
         self.smpr().modify(|w| {
-            w.set_smp1(sample_time);
+            w.set_sample_time(0, sample_time);
         });
 
         self.cfgr1().modify(|reg| {
             reg.set_chselrmod(!needs_hw);
             reg.set_align(Align::Right);
-            reg.set_scandir(if is_ordered_up { Scandir::Up } else { Scandir::Back });
+            reg.set_scandir(if is_ordered_up { Scandir::Upward } else { Scandir::Backward });
         });
 
         // Trigger and wait for the channel selection procedure to complete.
