@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use super::{Adc, Instance, Resolution, blocking_delay_us};
 use crate::adc::{AdcRegs, ConversionMode};
 use crate::pac::adc::vals::{Adstp, Align, Ckmode, Dmacfg, Exten, Ovrmod, SampleTime, Scandir};
@@ -109,7 +111,7 @@ impl AdcRegs for crate::pac::adc::Adc {
         let sequence_len = sequence.len();
         let mut hw_channel_selection: u32 = 0;
         let mut last_channel: u8 = 0;
-        let mut sample_time: Self::SampleTime = SampleTime::Cycles25;
+        let mut sample_time: Self::SampleTime = SampleTime::Cycles15;
 
         self.chselr_sq().write(|w| {
             for (i, ((channel, _), _sample_time)) in sequence.enumerate() {
@@ -171,25 +173,34 @@ impl AdcRegs for crate::pac::adc::Adc {
     }
 }
 
+#[inline]
+fn vrefint_cal_value() -> u16 {
+    // Embassy doesn't seem to export this for STM32C0 yet. Memory address from ST32C011x4/x6
+    // datasheet section 3.14.2 page 20.
+    const VREFINT_CAL_LOC: usize = 0x1FFF756A;
+    unsafe { core::ptr::read(VREFINT_CAL_LOC as *const u16) }
+}
+
 impl<'d, T: Instance<Regs = crate::pac::adc::Adc>> Adc<'d, T> {
     /// Create a new ADC driver.
     pub fn new(adc: Peri<'d, T>, resolution: Resolution) -> Self {
         rcc::enable_and_reset::<T>();
 
-        T::regs().cfgr2().modify(|w| w.set_ckmode(Ckmode::Sysclk));
+        T::regs().cfgr2().modify(|w| w.set_ckmode(Ckmode::PclkDiv2));
 
-        let prescaler = from_ker_ck(T::frequency());
+        //let prescaler = from_ker_ck(T::bus_frequency());
+        let prescaler = Presc::Div2;
         T::common_regs().ccr().modify(|w| w.set_presc(prescaler));
 
-        let frequency = T::frequency() / prescaler;
-        debug!("ADC frequency set to {}", frequency);
+        //let frequency = T::bus_frequency() / prescaler;
+        //debug!("ADC frequency set to {}", frequency);
 
-        if frequency > MAX_ADC_CLK_FREQ {
-            panic!(
-                "Maximal allowed frequency for the ADC is {} MHz and it varies with different packages, refer to ST docs for more information.",
-                MAX_ADC_CLK_FREQ.0 / 1_000_000
-            );
-        }
+        //if frequency > MAX_ADC_CLK_FREQ {
+        //    panic!(
+        //        "Maximal allowed frequency for the ADC is {} MHz and it varies with different packages, refer to ST docs for more information.",
+        //        MAX_ADC_CLK_FREQ.0 / 1_000_000
+        //    );
+        //}
 
         T::regs().cr().modify(|reg| {
             reg.set_advregen(true);
@@ -205,13 +216,28 @@ impl<'d, T: Instance<Regs = crate::pac::adc::Adc>> Adc<'d, T> {
         let autoff_value = T::regs().cfgr1().read().autoff();
         T::regs().cfgr1().modify(|w| w.set_autoff(false));
 
-        T::regs().cr().modify(|w| w.set_adcal(true));
+        let cal_avg = 8;
+        let mut cal_total = 0u32;
 
-        // "ADCAL bit stays at 1 during all the calibration sequence."
-        // "It is then cleared by hardware as soon the calibration completes."
-        while T::regs().cr().read().adcal() {}
+        for _ in 0..cal_avg {
+            T::regs().cr().modify(|w| w.set_adcal(true));
+            while T::regs().cr().read().adcal() {}
 
-        debug!("ADC calibration value: {}.", T::regs().dr().read().data());
+            let val = T::regs().dr().read().data() as u32 + 1;
+            cal_total += val;
+        }
+
+        // do the average, rouding up
+        let cal_factor = (cal_total + cal_avg - 1) / cal_avg;
+        let cal_factor = cal_factor.min(0x7f) as u8;
+
+        T::regs().cr().modify(|w| w.set_aden(true));
+        while !T::regs().isr().read().adrdy() {}
+        T::regs().calfact().write(|w| w.set_calfact(cal_factor));
+        T::regs().cr().modify(|w| w.set_aden(false));
+
+        debug!("ADC calibration value: {}.", cal_factor);
+        debug!("ADC vrefint_cal value: {}", vrefint_cal_value());
 
         T::regs().cfgr1().modify(|w| w.set_autoff(autoff_value));
 
