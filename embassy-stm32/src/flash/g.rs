@@ -237,10 +237,10 @@ fn restore_data_cache_state() {
 }
 
 // G0 doesn't have data cache, use no-op functions
-#[cfg(any(flash_g0x0, flash_g0x1))]
+#[cfg(any(flash_c0, flash_g0x0, flash_g0x1))]
 fn save_data_cache_state() {}
 
-#[cfg(any(flash_g0x0, flash_g0x1))]
+#[cfg(any(flash_c0, flash_g0x0, flash_g0x1))]
 fn restore_data_cache_state() {}
 
 #[cfg(all(bank_setup_configurable, any(flash_g4c2, flash_g4c3, flash_g4c4)))]
